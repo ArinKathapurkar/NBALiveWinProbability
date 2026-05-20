@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBA WIN PROBABILITY — LIVE</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* ─── TOKENS ─────────────────────────────────────────────── */
+    :root {
+      --bg:        #05080f;
+      --surface:   #090e1c;
+      --surface2:  #0d1427;
+      --border:    #131d30;
+      --borderhi:  #1d2e4a;
+      --text:      #c4d8f0;
+      --text2:     #415c7a;
+      --text3:     #1a2e46;
+      --green:     #00e87a;
+      --amber:     #f0a000;
+      --red:       #ff3b47;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Courier New', 'Lucida Console', Courier, monospace;
+      min-height: 100vh;
+      /* dot-grid background */
+      background-image: radial-gradient(circle, #1a2e46 1px, transparent 1px);
+      background-size: 28px 28px;
+      background-position: center center;
+    }
+
+    /* scanline overlay */
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,0,0,0.045) 3px,
+        rgba(0,0,0,0.045) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ─── HEADER ─────────────────────────────────────────────── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 500;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 54px;
+      padding: 0 24px;
+      background: rgba(5,8,15,0.94);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--borderhi);
+    }
+
+    .h-left { display: flex; align-items: center; gap: 16px; }
+
+    .h-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .live-pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border: 1px solid rgba(255,59,71,0.4);
+      background: rgba(255,59,71,0.07);
+      border-radius: 2px;
+    }
+
+    .live-pill span {
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--red);
+    }
+
+    .blink-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--red);
+      animation: blink 1.5s infinite;
+    }
+
+    @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.15; } }
+
+    .h-right {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+    }
+
+    .h-stat {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 10px;
+    }
+
+    .h-stat-k { color: var(--text3); letter-spacing: 0.1em; }
+    .h-stat-v { color: var(--text2); font-weight: 700; }
+
+    .conn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .conn-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--text3);
+      transition: background 0.4s;
+    }
+    .conn-dot.ok  { background: var(--green); }
+    .conn-dot.err { background: var(--red); animation: blink 0.8s infinite; }
+
+    #conn-lbl { color: var(--text2); }
+
+    /* ─── MAIN ───────────────────────────────────────────────── */
+    main {
+      padding: 24px;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    /* ─── GRID ───────────────────────────────────────────────── */
+    #grid {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 720px)  { #grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 1100px) { #grid { grid-template-columns: repeat(3, 1fr); } }
+
+    /* ─── EMPTY STATE ────────────────────────────────────────── */
+    #empty {
+      display: none;
+      grid-column: 1 / -1;
+      padding: 96px 0;
+      text-align: center;
+    }
+
+    .empty-icon {
+      font-size: 36px;
+      color: var(--text3);
+      margin-bottom: 18px;
+      letter-spacing: -4px;
+    }
+
+    .empty-head {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--text2);
+      margin-bottom: 8px;
+    }
+
+    .empty-sub {
+      font-size: 9px;
+      letter-spacing: 0.15em;
+      color: var(--text3);
+    }
+
+    /* ─── CARD ───────────────────────────────────────────────── */
+    .card {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      animation: card-in 0.38s ease-out both;
+    }
+
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* glowing accent strip — home team color */
+    .card-strip {
+      height: 2px;
+      width: 100%;
+    }
+
+    /* ── Card Header ── */
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .matchup { display: flex; align-items: center; gap: 12px; }
+
+    .tm { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+
+    .tm-code {
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      line-height: 1;
+    }
+
+    .tm-role {
+      font-size: 7px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+
+    .vs-sep { font-size: 9px; color: var(--text3); }
+
+    .game-status { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+
+    .period-tag {
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--amber);
+      padding: 2px 6px;
+      border: 1px solid rgba(240,160,0,0.28);
+      background: rgba(240,160,0,0.06);
+      border-radius: 1px;
+    }
+
+    .clock-val {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Score diff ── */
+    .score-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 5px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      color: var(--text3);
+      text-transform: uppercase;
+    }
+
+    /* ── Probability numbers ── */
+    .prob-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px 10px;
+    }
+
+    .prob-side { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+    .prob-side.left  { align-items: flex-start; }
+    .prob-side.right { align-items: flex-end; }
+
+    .prob-num {
+      font-size: 52px;
+      font-weight: 900;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      display: flex;
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .prob-pct {
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1;
+      margin-top: 8px;
+    }
+
+    .prob-team-lbl {
+      font-size: 8px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text3);
+    }
+
+    .prob-mid {
+      font-size: 11px;
+      color: var(--border);
+      padding: 0 8px;
+      flex-shrink: 0;
+    }
+
+    @keyframes num-flash {
+      0%   { opacity: 1; }
+      30%  { opacity: 0.45; }
+      100% { opacity: 1; }
+    }
+    .prob-num.flash { animation: num-flash 0.38s ease-out; }
+
+    /* ── Chart ── */
+    .chart-wrap {
+      position: relative;
+      height: 148px;
+      padding: 2px 14px 0;
+    }
+
+    /* ── Probability bar ── */
+    .bar-section { padding: 8px 16px 14px; }
+
+    .bar-track {
+      position: relative;
+      height: 5px;
+      border-radius: 99px;
+      overflow: hidden;
+      /* background set per-card via JS to away color at low opacity */
+    }
+
+    .bar-fill {
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      border-radius: 99px;
+      transition: width 0.55s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .bar-labels {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+
+    /* ─── SCROLLBAR ──────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--borderhi); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+<!-- ─── HEADER ─────────────────────────────────────────────────── -->
+<header>
+  <div class="h-left">
+    <div class="h-title">NBA &nbsp; Win &nbsp; Probability</div>
+    <div class="live-pill">
+      <div class="blink-dot"></div>
+      <span>Live</span>
+    </div>
+  </div>
+  <div class="h-right">
+    <div class="h-stat">
+      <span class="h-stat-k">GAMES</span>
+      <span class="h-stat-v" id="game-count">—</span>
+    </div>
+    <div class="conn">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span id="conn-lbl">CONNECTING</span>
+    </div>
+    <div class="h-stat">
+      <span class="h-stat-k">UPDATED</span>
+      <span class="h-stat-v" id="last-ts">—</span>
+    </div>
+  </div>
+</header>
+
+<!-- ─── MAIN ───────────────────────────────────────────────────── -->
+<main>
+  <div id="grid">
+    <div id="empty">
+      <div class="empty-icon">( )</div>
+      <div class="empty-head">No Live Games Right Now</div>
+      <div class="empty-sub">Check back at tip-off</div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ─── TEAM COLORS ─────────────────────────────────────────────── */
+// [primary, secondary] — primary is used for home, secondary for accents
+const TC = {
+  ATL: ['#E03A3E', '#C1D32F'],
+  BOS: ['#007A33', '#BA9653'],
+  BKN: ['#AAAAAA', '#555555'],
+  CHA: ['#00788C', '#1D1160'],
+  CHI: ['#CE1141', '#000000'],
+  CLE: ['#860038', '#FDBB30'],
+  DAL: ['#00538C', '#B8C4CA'],
+  DEN: ['#FEC524', '#0E2240'],
+  DET: ['#C8102E', '#1D42BA'],
+  GSW: ['#FFC72C', '#1D428A'],
+  HOU: ['#CE1141', '#C4CED4'],
+  IND: ['#FDBB30', '#002D62'],
+  LAC: ['#C8102E', '#1D428A'],
+  LAL: ['#FDB927', '#552583'],
+  MEM: ['#5D76A9', '#12173F'],
+  MIA: ['#98002E', '#F9A01B'],
+  MIL: ['#00471B', '#EEE1C6'],
+  MIN: ['#236192', '#0C2340'],
+  NOP: ['#85714D', '#0C2340'],
+  NYK: ['#F58426', '#006BB6'],
+  OKC: ['#007AC1', '#EF3B24'],
+  ORL: ['#0077C0', '#C4CED4'],
+  PHI: ['#006BB6', '#ED174C'],
+  PHX: ['#E56020', '#1D1160'],
+  POR: ['#E03A3E', '#000000'],
+  SAC: ['#5A2D81', '#63727A'],
+  SAS: ['#C4CED4', '#000000'],
+  TOR: ['#CE1141', '#000000'],
+  UTA: ['#002B5C', '#F9A01B'],
+  WAS: ['#E31837', '#002B5C'],
+};
+
+function teamColor(code) { return TC[code] || ['#4a6380', '#1e3050']; }
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/* ─── UTILS ───────────────────────────────────────────────────── */
+function nowTs() {
+  return new Date().toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
+}
+
+function periodLabel(p) {
+  if (!p || p <= 0) return 'PRE';
+  if (p <= 4) return `Q${p}`;
+  return `OT${p - 4}`;
+}
+
+function diffLabel(d) {
+  if (d == null || d === 0) return 'TIED';
+  return d > 0 ? `HOME  +${d}` : `AWAY  +${Math.abs(d)}`;
+}
+
+/* ─── STATE ───────────────────────────────────────────────────── */
+// game_id → { chart, el, count }
+const state = {};
+
+/* ─── CHART ───────────────────────────────────────────────────── */
+function makeChart(canvas, homeHex) {
+  const ctx = canvas.getContext('2d');
+  const [r, g, b] = hexToRgb(homeHex);
+
+  // Gradient fill under home-win curve
+  const grad = ctx.createLinearGradient(0, 0, 0, 148);
+  grad.addColorStop(0,    `rgba(${r},${g},${b},0.32)`);
+  grad.addColorStop(0.65, `rgba(${r},${g},${b},0.06)`);
+  grad.addColorStop(1,    `rgba(${r},${g},${b},0)`);
+
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        data: [],
+        borderColor: `rgb(${r},${g},${b})`,
+        borderWidth: 1.75,
+        backgroundColor: grad,
+        fill: true,
+        tension: 0.44,
+        pointRadius: 0,
+        pointHitRadius: 14,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 380, easing: 'easeInOutCubic' },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(9,14,28,0.96)',
+          borderColor: 'rgba(29,46,74,0.7)',
+          borderWidth: 1,
+          titleColor: '#1a2e46',
+          bodyColor: '#c4d8f0',
+          titleFont: { family: 'Courier New', size: 9 },
+          bodyFont: { family: 'Courier New', size: 13, weight: '700' },
+          padding: 9,
+          callbacks: {
+            title: items => `update #${items[0].dataIndex + 1}`,
+            label: item => `${Math.round(item.raw)}% home win prob`,
+          },
+        },
+      },
+      scales: {
+        x: { display: false },
+        y: {
+          min: 0, max: 100,
+          position: 'right',
+          grid: { color: 'rgba(19,29,48,0.95)', drawBorder: false },
+          ticks: {
+            color: '#1a2e46',
+            font: { family: 'Courier New', size: 8 },
+            maxTicksLimit: 5,
+            callback: v => {
+              if (v === 0 || v === 100) return `${v}`;
+              if (v === 50) return '50';
+              return '';
+            },
+            padding: 5,
+          },
+          border: { display: false },
+        },
+      },
+    },
+  });
+}
+
+/* ─── CARD CREATION ───────────────────────────────────────────── */
+function createCard(g) {
+  const [hc] = teamColor(g.home_team);
+  const [ac] = teamColor(g.away_team);
+  const hp = Math.round(g.home_win_prob * 100);
+  const ap = 100 - hp;
+  const [ar, ag, ab] = hexToRgb(ac);
+
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.id = `c-${g.game_id}`;
+
+  el.innerHTML = `
+    <div class="card-strip" style="background:${hc}"></div>
+
+    <div class="card-head">
+      <div class="matchup">
+        <div class="tm">
+          <div class="tm-code" style="color:${hc}">${g.home_team}</div>
+          <div class="tm-role">HOME</div>
+        </div>
+        <div class="vs-sep">vs</div>
+        <div class="tm">
+          <div class="tm-code" style="color:${ac}">${g.away_team}</div>
+          <div class="tm-role">AWAY</div>
+        </div>
+      </div>
+      <div class="game-status">
+        <div class="period-tag" id="period-${g.game_id}">${periodLabel(g.period)}</div>
+        <div class="clock-val"  id="clock-${g.game_id}">${g.clock || '--:--'}</div>
+      </div>
+    </div>
+
+    <div class="score-row" id="diff-${g.game_id}">${diffLabel(g.score_diff)}</div>
+
+    <div class="prob-row">
+      <div class="prob-side left">
+        <div class="prob-num" id="hp-${g.game_id}" style="color:${hc}">
+          ${hp}<span class="prob-pct">%</span>
+        </div>
+        <div class="prob-team-lbl">${g.home_team}</div>
+      </div>
+      <div class="prob-mid">|</div>
+      <div class="prob-side right">
+        <div class="prob-num" id="ap-${g.game_id}" style="color:${ac}">
+          ${ap}<span class="prob-pct">%</span>
+        </div>
+        <div class="prob-team-lbl">${g.away_team}</div>
+      </div>
+    </div>
+
+    <div class="chart-wrap">
+      <canvas id="ch-${g.game_id}"></canvas>
+    </div>
+
+    <div class="bar-section">
+      <div class="bar-track" id="track-${g.game_id}"
+           style="background:rgba(${ar},${ag},${ab},0.18)">
+        <div class="bar-fill" id="bar-${g.game_id}"
+             style="width:${hp}%;background:${hc}"></div>
+      </div>
+      <div class="bar-labels" id="barlbls-${g.game_id}">
+        <span style="color:${hc}">${g.home_team} &nbsp;${hp}%</span>
+        <span style="color:${ac}">${ap}% &nbsp;${g.away_team}</span>
+      </div>
+    </div>`;
+
+  document.getElementById('grid').appendChild(el);
+
+  const chart = makeChart(document.getElementById(`ch-${g.game_id}`), hc);
+  pushPoint(chart, g.home_win_prob * 100);
+
+  state[g.game_id] = { chart, el, count: 1 };
+}
+
+/* ─── CARD UPDATE ─────────────────────────────────────────────── */
+function updateCard(g) {
+  const s = state[g.game_id];
+  if (!s) return;
+
+  const [hc] = teamColor(g.home_team);
+  const [ac] = teamColor(g.away_team);
+  const hp = Math.round(g.home_win_prob * 100);
+  const ap = 100 - hp;
+
+  const hpEl = document.getElementById(`hp-${g.game_id}`);
+  if (hpEl) {
+    hpEl.innerHTML = `${hp}<span class="prob-pct">%</span>`;
+    hpEl.classList.remove('flash');
+    requestAnimationFrame(() => hpEl.classList.add('flash'));
+  }
+
+  const apEl = document.getElementById(`ap-${g.game_id}`);
+  if (apEl) apEl.innerHTML = `${ap}<span class="prob-pct">%</span>`;
+
+  const barEl = document.getElementById(`bar-${g.game_id}`);
+  if (barEl) barEl.style.width = `${hp}%`;
+
+  const lblEl = document.getElementById(`barlbls-${g.game_id}`);
+  if (lblEl)
+    lblEl.innerHTML = `<span style="color:${hc}">${g.home_team} &nbsp;${hp}%</span>` +
+                      `<span style="color:${ac}">${ap}% &nbsp;${g.away_team}</span>`;
+
+  const clkEl = document.getElementById(`clock-${g.game_id}`);
+  if (clkEl) clkEl.textContent = g.clock || '--:--';
+
+  const perEl = document.getElementById(`period-${g.game_id}`);
+  if (perEl) perEl.textContent = periodLabel(g.period);
+
+  const difEl = document.getElementById(`diff-${g.game_id}`);
+  if (difEl) difEl.textContent = diffLabel(g.score_diff);
+
+  pushPoint(s.chart, g.home_win_prob * 100);
+  s.count++;
+}
+
+function pushPoint(chart, val) {
+  const d = chart.data;
+  d.labels.push(d.labels.length + 1);
+  d.datasets[0].data.push(val);
+  if (d.labels.length > 120) {
+    d.labels.shift();
+    d.datasets[0].data.shift();
+  }
+  chart.update('active');
+}
+
+/* ─── PROBABILITIES EVENT ─────────────────────────────────────── */
+function onProbabilities(data) {
+  const emptyEl = document.getElementById('empty');
+
+  if (!data || data.length === 0) {
+    emptyEl.style.display = 'block';
+    document.getElementById('game-count').textContent = '0';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  document.getElementById('game-count').textContent = String(data.length);
+  document.getElementById('last-ts').textContent = nowTs();
+
+  // Remove cards that are no longer in the payload
+  const incoming = new Set(data.map(g => g.game_id));
+  Object.keys(state).forEach(id => {
+    if (!incoming.has(id)) {
+      state[id].chart.destroy();
+      state[id].el.remove();
+      delete state[id];
+    }
+  });
+
+  // Create or update
+  data.forEach(g => {
+    if (state[g.game_id]) updateCard(g);
+    else createCard(g);
+  });
+}
+
+/* ─── SOCKET.IO ───────────────────────────────────────────────── */
+const dot = document.getElementById('conn-dot');
+const lbl = document.getElementById('conn-lbl');
+
+const socket = io('http://localhost:5001', {
+  transports: ['websocket', 'polling'],
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 2000,
+});
+
+socket.on('connect',       () => { dot.className = 'conn-dot ok';  lbl.textContent = 'CONNECTED';    });
+socket.on('disconnect',    () => { dot.className = 'conn-dot err'; lbl.textContent = 'DISCONNECTED'; });
+socket.on('connect_error', () => { dot.className = 'conn-dot err'; lbl.textContent = 'ERROR';        });
+socket.on('reconnecting',  () => { dot.className = 'conn-dot';     lbl.textContent = 'RECONNECTING'; });
+
+socket.on('probabilities', onProbabilities);
+
+/* ─── INIT ────────────────────────────────────────────────────── */
+document.getElementById('empty').style.display = 'block';
+</script>
+</body>
+</html>

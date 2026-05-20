@@ -25,14 +25,10 @@ TRAINING = {
 TRAINING["scaler"].parent.mkdir(parents=True, exist_ok=True)
 TRAINING["checkpoint"].parent.mkdir(parents=True, exist_ok=True)
 
-
-
-
-
 class LiveProbability(nn.Module):
     def __init__(self):
         super().__init__()
-        self.layer1 = nn.Linear(8,32)
+        self.layer1 = nn.Linear(11,32)
         self.relu = nn.ReLU()
         self.layer2 = nn.Linear(32,16)
         self.layer3 = nn.Linear(16,1)
@@ -49,53 +45,51 @@ class LiveProbability(nn.Module):
 
 model = LiveProbability()
 loss_fn = nn.BCELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 best_val_loss = float('inf')
 
 
-def predict_win_probability(game_state: dict, model, scaler) -> float:
-    """
-    Predicts the probability that the HOME team wins.
-    
-    Input features (8):
-        period, seconds_remaining_in_period, seconds_remaining_in_game,
-        score_diff (home - away), home_fouls, away_fouls,
-        foul_diff (home - away), possession (1=home, 0=away)
-    
-    Output:
-        float in (0, 1) — probability of home team winning
-    """
-    scaler = joblib.load(TRAINING["scaler"])
-    
-    model = LiveProbability()
-    model.load_state_dict(torch.load(TRAINING["checkpoint"]))
-    model.eval()
+def predict_win_probability(game_state: dict, model, scaler) -> dict:
 
-    # build feature array in the same column order as training
+    # ── translate live state → model features ──────────────
+    clock   = game_state['clock_seconds']
+    period  = game_state['period']
+
+    # seconds remaining in game — approximate from period and clock
+    seconds_remaining_in_game = max(0, ((4 - period) * 720) + clock)
+
+    # possession: convert tricode to 1 (home) or 0 (away)
+    possession = 1 if game_state['possession'] == game_state['home_team'] else 0
+
+    # bonus flags — approximate from foul counts
+    home_in_bonus = 1 if game_state['home_fouls'] >= 5 else 0
+    away_in_bonus = 1 if game_state['away_fouls'] >= 5 else 0
+
     features = np.array([[
-        game_state['period'],
-        game_state['seconds_remaining_in_period'],
-        game_state['seconds_remaining_in_game'],
+        period,
+        clock,                       # seconds_remaining_in_period
+        seconds_remaining_in_game,
         game_state['score_diff'],
         game_state['home_fouls'],
         game_state['away_fouls'],
         game_state['foul_diff'],
-        game_state['possession']
+        possession,
+        game_state['score_diff'] * seconds_remaining_in_game,  # lead_time_interaction
+        home_in_bonus,
+        away_in_bonus
     ]])
 
     features_scaled = scaler.transform(features)
-
     x = torch.tensor(features_scaled, dtype=torch.float32)
 
-    # forward pass
     with torch.no_grad():
         prob = model(x)
 
     return {
-        "home_team"         : game_state["home_team"],
-        "away_team"         : game_state["away_team"],
-        "home_win_prob"     : round(prob.item(), 4),
-        "away_win_prob"     : round(1 - prob.item(), 4),
+        "home_team"     : game_state["home_team"],
+        "away_team"     : game_state["away_team"],
+        "home_win_prob" : round(prob.item(), 4),
+        "away_win_prob" : round(1 - prob.item(), 4),
     }
 
 
@@ -107,6 +101,9 @@ if __name__ == "__main__":
         raise FileNotFoundError("No training data found — run fetch_historical.py first")
 
     data = pd.concat(frames, ignore_index=True)
+    data['lead_time_interaction'] = data['score_diff'] * data['seconds_remaining_in_game']
+    data['home_in_bonus'] = (data['home_fouls'] >= 5).astype(int)
+    data['away_in_bonus'] = (data['away_fouls'] >= 5).astype(int)
     #print(f"Loaded {len(data)} rows from {len(frames)} seasons")
 
     '''
@@ -136,7 +133,10 @@ if __name__ == "__main__":
                     'home_fouls',
                     'away_fouls',
                     'foul_diff',
-                    'possession' 
+                    'possession',
+                    'lead_time_interaction',
+                    'home_in_bonus', 
+                    'away_in_bonus' 
                     ]
 
 
